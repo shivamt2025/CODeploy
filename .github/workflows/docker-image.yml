@@ -1,0 +1,68 @@
+name: 'Build and Deploy'
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v2
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+
+            cd /home/ubuntu/CODeploy
+
+            # Pull the latest code from GitHub
+            git pull origin main
+
+            # Set up environment variables for build server
+            if [ ! -f "build-server/.env" ]; then
+              echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" > build-server/.env
+              echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> build-server/.env
+              echo "REDIS_URL=${{ secrets.REDIS_URL }}" >> build-server/.env
+              echo "PROJECT_ID=${{ secrets.PROJECT_ID }}" >> build-server/.env
+            fi
+
+            # Set up environment variables for API server
+            if [ ! -f "api-server/.env" ]; then
+              echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" > api-server/.env
+              echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> api-server/.env
+              echo "CLUSTER=${{ secrets.AWS_CLUSTER }}" >> api-server/.env
+              echo "TASK=${{ secrets.AWS_TASK }}" >> api-server/.env
+              echo "REDIS_URL=${{ secrets.REDIS_URL }}" >> api-server/.env
+            fi
+
+            # Display .env files for verification
+            cat build-server/.env
+            cat api-server/.env
+
+            # Build server: Install dependencies, build, and deploy to S3
+            cd build-server
+            npm install
+            node script.js
+
+            # API server: Install dependencies and start the server
+            cd ../api-server
+            npm install
+            pm2 stop api-server || true
+            pm2 start index.js --name api-server
+
+            # Reverse proxy: Install dependencies and start the proxy
+            cd ../s3-reverse-proxy
+            npm install
+            pm2 stop reverse-proxy || true
+            pm2 start index.js --name reverse-proxy
+
+        
